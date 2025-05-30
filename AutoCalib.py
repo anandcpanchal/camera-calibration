@@ -3,9 +3,6 @@ import scipy.optimize
 from MathHelper import *
 from ImageUtils import *
 
-square_side = 20  # Define the side length of the square in the chessboard pattern (in mm or any consistent unit)
-
-
 def extractParamsFromA_kc(A_matrix_val, kc_coeffs_val):
     """
     Extract individual parameters from the intrinsic matrix A_matrix_val and distortion coefficients kc_coeffs_val.
@@ -293,7 +290,7 @@ def lossFunctionOptimization(params_x0_vec, initial_all_RT_extrinsics_list, all_
     return np.array(all_residuals_list)
 
 
-def calibrate(input_path, output_path, corner_count_w=9, corner_count_h=6):
+def calibrate(input_path, output_path, corner_count_w=9, corner_count_h=6, square_size=20):
     # Configuration
     if not os.path.exists(input_path):
         print(f"ERROR: Image folder '{input_path}' not found. Please update the path.")
@@ -305,7 +302,6 @@ def calibrate(input_path, output_path, corner_count_w=9, corner_count_h=6):
 
     h_corners = corner_count_h
     w_corners = corner_count_w
-    # square_side defined globally
 
     # 1. Load Images
     loaded_images_info = loadImages(input_path)
@@ -342,7 +338,7 @@ def calibrate(input_path, output_path, corner_count_w=9, corner_count_h=6):
     print(f"\nFound corners in {len(all_image_points)} out of {len(loaded_images_info)} images, proceeding with these.")
 
     # 3. Get World Coordinates
-    world_points_2d = getWorldPoints(square_side, h_corners, w_corners)
+    world_points_2d = getWorldPoints(square_size, h_corners, w_corners)
 
     # 4. Display Detected Corners
     print("\nSaving images with detected corners...")
@@ -354,7 +350,7 @@ def calibrate(input_path, output_path, corner_count_w=9, corner_count_h=6):
     print("\n--- Initial Parameter Estimation ---")
     # 5. Compute Homographies
     print("Calculating initial homographies (H)...")
-    all_H_initial_raw = getAllH(all_image_points, square_side, h_corners, w_corners)
+    all_H_initial_raw = getAllH(all_image_points, square_size, h_corners, w_corners)
 
     # Filter out invalid Homographies and corresponding image data
     all_H_valid = []
