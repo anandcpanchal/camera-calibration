@@ -6,6 +6,7 @@ import logging
 
 # --- Debug Logging Configuration ---
 DEBUG_LOGGING_ENABLED = True  # Set to False to disable debug logging to file
+DEEP_DEBUG_LOGGING_ENABLED = False  # Set to False to disable deep debug logging (recursive functions) to file
 DEBUG_LOG_FILENAME = "calibration_debug.log"
 
 def setup_debug_logger(log_file_path, enabled=True):
@@ -136,7 +137,7 @@ def reprojectPointsAndGetError(A_intrinsic_mat, kc_coeffs_arr, all_RT_extrinsics
         np.zeros((world_corners_2d_coords.shape[0], 1)),
         np.ones((world_corners_2d_coords.shape[0], 1))
     )).T
-    if logger: logger.debug(f"World corners 3D Homogeneous (shape {world_corners_3d_homo.shape}):\nFirst 3 cols:\n{world_corners_3d_homo[:,:3]}")
+    if logger: logger.debug(f"World corners 3D Homogeneous (shape {world_corners_3d_homo.shape}):\nCols:\n{world_corners_3d_homo}")
 
     for i, observed_corners_img in enumerate(all_observed_image_corners_list):
         if logger: logger.debug(f"  Processing view {i+1}/{len(all_observed_image_corners_list)} for reprojection error.")
@@ -149,7 +150,7 @@ def reprojectPointsAndGetError(A_intrinsic_mat, kc_coeffs_arr, all_RT_extrinsics
 
         reprojected_points_img = projectPointsWithDistortion(world_corners_3d_homo, RT_extrinsic_mat, A_intrinsic_mat, kc_coeffs_arr, logger=None) # Inner loop, less logger
         all_reprojected_points_distorted_list_final.append(reprojected_points_img)
-        if logger: logger.debug(f"    Reprojected points for view {i} (shape {reprojected_points_img.shape}). First 3:\n{reprojected_points_img[:3]}")
+        if logger: logger.debug(f"    Reprojected points for view {i} (shape {reprojected_points_img.shape}). Reprojected Points:\n{reprojected_points_img}")
 
 
         valid_mask = ~np.isnan(reprojected_points_img).any(axis=1)
@@ -186,7 +187,7 @@ def lossFunctionOptimization(params_x0_vec, initial_all_RT_extrinsics_list, all_
     """
     # This function is called many times by the optimizer, so logging inside can be very verbose.
     # Log entry/exit or key parameter changes if needed, but be cautious.
-    # if logger: logger.debug(f"lossFunctionOptimization called. fixed_extrinsics_flag: {fixed_extrinsics_flag}, params_x0_vec[:7]: {params_x0_vec[:7]}")
+    if logger and DEEP_DEBUG_LOGGING_ENABLED: logger.debug(f"lossFunctionOptimization called. fixed_extrinsics_flag: {fixed_extrinsics_flag}, params_x0_vec[:7]: {params_x0_vec[:7]}")
 
     num_intrinsic_params = 7
     A_intrinsic_mat, kc_coeffs_arr = retrieveA_kc_fromParams(params_x0_vec[:num_intrinsic_params], logger=None) # No logger for frequent calls
@@ -263,7 +264,7 @@ def lossFunctionOptimization(params_x0_vec, initial_all_RT_extrinsics_list, all_
         all_residuals_list.extend(residuals_img_pairs.ravel())
 
     final_residuals = np.array(all_residuals_list)
-    # if logger: logger.debug(f"lossFunctionOptimization returning {final_residuals.shape[0]} residuals. Example first 10: {final_residuals[:10]}")
+    if logger and DEEP_DEBUG_LOGGING_ENABLED: logger.debug(f"lossFunctionOptimization returning {final_residuals.shape[0]} residuals. Examples: {final_residuals}")
     return final_residuals
 
 
@@ -318,7 +319,7 @@ def calibrate(input_path, output_path, corner_width_count, corner_height_count, 
     # 3. Get World Coordinates
     logger.info("--- Stage 3: Generating World Coordinates ---")
     world_points_2d = getWorldPoints(square_side, h_corners, w_corners)
-    logger.debug(f"Generated world points (Z=0), shape: {world_points_2d.shape}. First 3 points:\n{world_points_2d[:3]}")
+    logger.debug(f"Generated world points (Z=0), shape: {world_points_2d.shape}. Worldf points:\n{world_points_2d}")
 
     # 4. Display Detected Corners (Optional Visual Check)
     logger.info("--- Stage 4: Saving Images with Detected Corners ---")

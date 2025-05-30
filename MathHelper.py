@@ -80,7 +80,7 @@ def getAllH(all_corners, square_side, h, w, logger):
         f"Entering getAllH. Number of corner sets: {len(all_corners)}, square_side: {square_side}, h: {h}, w: {w}")
     set1_world_points = getWorldPoints(square_side, h, w)
     if logger: logger.debug(
-        f"Generated world points for homography: shape {set1_world_points.shape}, first few points:\n{set1_world_points[:3]}")
+        f"Generated world points for homography: shape {set1_world_points.shape}, world points:\n{set1_world_points}")
 
     all_H_list = []
     for i, corners_image_points in enumerate(all_corners):
