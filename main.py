@@ -15,7 +15,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output_path", type=str, help="A path to read output results")
     parser.add_argument("-W", "--width_square_count", type=int, help="Count of squares in the pattern along the width")
     parser.add_argument("-H", "--height_square_count", type=int, help="Count of squares in the pattern along the height")
-    parser.add_argument("-H", "--square_size", type=int, help="Size of a square")
+    parser.add_argument("-s", "--square_size", type=int, help="Size of a square")
 
     args = parser.parse_args()
     main(args)
