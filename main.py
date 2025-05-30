@@ -2,8 +2,6 @@ from AutoCalib import calibrate
 import argparse
 
 def main(args):
-    import pdb
-    pdb.set_trace()
     calibrate(args.input_path, args.output_path, args.width_square_count-1, args.height_square_count-1, args.square_size)
 
 
