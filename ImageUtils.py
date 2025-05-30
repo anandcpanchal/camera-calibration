@@ -5,107 +5,101 @@ import os
 # Termination criteria for cornerSubPix and optimization algorithms
 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
-def loadImages(folder_name_path):
+def loadImages(folder_name_path, logger=None):
     """
     Load all images from a specified folder.
-
-    Args:
-        folder_name_path (str): Path to the folder containing images.
-
-    Returns:
-        list of dict: A list of dictionaries, each containing 'path', 'name', and 'data' (image as numpy.ndarray).
-                      Returns an empty list if folder doesn't exist or no images are loaded.
     """
+    if logger: logger.debug(f"Entering loadImages. Folder: '{folder_name_path}'")
     if not os.path.isdir(folder_name_path):
+        if logger: logger.error(f"Folder '{folder_name_path}' not found.")
         print(f"Error: Folder '{folder_name_path}' not found.")
         return []
 
     files = os.listdir(folder_name_path)
     images_loaded_info = []
     supported_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
-    print(f"Loading images from '{folder_name_path}':")
-    for f_name in sorted(files):  # Sort to ensure consistent order
+    if logger: logger.debug(f"Found {len(files)} files/dirs in folder. Supported extensions: {supported_extensions}")
+
+    for f_name in sorted(files):
         if f_name.lower().endswith(supported_extensions):
             image_path = os.path.join(folder_name_path, f_name)
+            if logger: logger.debug(f"  Attempting to load image: '{image_path}'")
             image_data = cv2.imread(image_path)
             if image_data is not None:
-                images_loaded_info.append(dict(path=image_path, name= f_name, data= image_data))
-                # print(f"  Loaded '{f_name}' (shape: {image_data.shape})") # Reduce console noise
+                images_loaded_info.append({'path': image_path, 'name': f_name, 'data': image_data})
+                if logger: logger.debug(f"    Successfully loaded '{f_name}' (shape: {image_data.shape})")
             else:
-                print(f"  Error loading image '{f_name}'")
+                if logger: logger.warning(f"    Error loading image '{f_name}' (cv2.imread returned None)")
         # else:
-        # print(f"  Skipping non-image file or unsupported extension: '{f_name}'") # Reduce noise
+            # if logger: logger.debug(f"  Skipping non-image file or unsupported extension: '{f_name}'")
 
     if not images_loaded_info:
+        if logger: logger.warning(f"No images were loaded from '{folder_name_path}'.")
         print(f"No images were loaded from '{folder_name_path}'. Check file paths and formats.")
+    if logger: logger.debug(f"Exiting loadImages. Loaded {len(images_loaded_info)} images.")
     return images_loaded_info
 
-def getImagesPoints(images_list, h_corners, w_corners):
+def getImagesPoints(images_list, h_corners, w_corners, logger=None):
     """
     Detect chessboard corners in a list of images.
-
-    Args:
-        images_list (list of numpy.ndarray): List of input images (BGR format).
-        h_corners (int): Number of internal corners along the height of the chessboard.
-        w_corners (int): Number of internal corners along the width of the chessboard.
-
-    Returns:
-        list of numpy.ndarray: A list where each element is an array of detected 2D image corners
-                               (shape (N, 2)) for one calibration image where corners were found.
-                               Returns an empty list if no corners are found in any image.
     """
-    all_image_corners = []
-    for i, image_data in enumerate(images_list):
+    if logger: logger.debug(f"Entering getImagesPoints. Number of images: {len(images_list)}, h_corners: {h_corners}, w_corners: {w_corners}")
+    all_image_corners_list = [] # Stores corner arrays for images where detection was successful
+    successful_image_indices = [] # Stores original indices of successfully processed images
+
+    for i, image_data_dict in enumerate(images_list): # Assuming images_list is list of dicts from loadImages
+        image_data = image_data_dict['data']
+        image_name = image_data_dict['name']
+        if logger: logger.debug(f"Processing image {i+1}/{len(images_list)} ('{image_name}') for corners.")
+
         gray = cv2.cvtColor(image_data, cv2.COLOR_BGR2GRAY)
-        # Find the chessboard corners
         ret, corners = cv2.findChessboardCorners(gray, (w_corners, h_corners), None)
 
         if ret == True:
-            # Refine corner locations
+            if logger: logger.debug(f"  Initial corners found for '{image_name}'. Refining...")
             corners_subpix = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-            corners_subpix = corners_subpix.reshape(-1, 2)  # Reshape to (N, 2)
-            all_image_corners.append(corners_subpix)
-            # print(f"Chessboard corners found and refined for image {i+1}.") # Moved to main for better context
-        # else:
-        # print(f"Chessboard corners not found for image {i+1}.") # Moved to main
-    return all_image_corners
+            corners_subpix_reshaped = corners_subpix.reshape(-1, 2)
+            all_image_corners_list.append(corners_subpix_reshaped)
+            successful_image_indices.append(i) # Store original index
+            if logger: logger.debug(f"  Refined corners for '{image_name}'. Shape: {corners_subpix_reshaped.shape}. Added to list.")
+        else:
+            if logger: logger.info(f"  Chessboard corners NOT found for image '{image_name}'.")
 
-def displayCorners(images_list_display, all_image_corners_display, h_corners, w_corners, save_folder_path):
+    if logger: logger.debug(f"Exiting getImagesPoints. Found corners in {len(all_image_corners_list)} images.")
+    return all_image_corners_list, successful_image_indices
+
+def displayCorners(images_list_display, all_image_corners_display, h_corners, w_corners, save_folder_path, original_filenames=None, logger=None):
     """
     Display and save images with detected chessboard corners drawn.
-    Assumes images_list_display and all_image_corners_display are corresponding lists
-    (i.e., images_list_display[i] is the image for all_image_corners_display[i]).
-
-    Args:
-        images_list_display (list of numpy.ndarray): List of original images for which corners were found.
-        all_image_corners_display (list of numpy.ndarray): List of detected corners for each image in images_list_display.
-        h_corners (int): Number of internal corners along the height.
-        w_corners (int): Number of internal corners along the width.
-        save_folder_path (str): Folder path to save the images with drawn corners.
     """
+    if logger: logger.debug(f"Entering displayCorners. Saving to: {save_folder_path}")
     if not os.path.exists(save_folder_path):
         os.makedirs(save_folder_path)
-        print(f"Created directory: {save_folder_path}")
+        if logger: logger.info(f"Created directory for displaying corners: {save_folder_path}")
 
     if len(images_list_display) != len(all_image_corners_display):
-        print("Warning in displayCorners: Mismatch between number of images and corner sets. Skipping display.")
+        if logger: logger.error("Mismatch between number of images and corner sets in displayCorners. Skipping display.")
         return
 
     for i, corners_for_image in enumerate(all_image_corners_display):
-        image_to_draw_on = images_list_display[i].copy()  # Use the image corresponding to this set of corners
+        image_to_draw_on = images_list_display[i].copy()
         corners_float32 = np.float32(corners_for_image.reshape(-1, 1, 2))
         cv2.drawChessboardCorners(image_to_draw_on, (w_corners, h_corners), corners_float32, True)
 
-        display_width = 800
+        display_width = 800 # Target width for saved image
         if image_to_draw_on.shape[1] > display_width:
             scale_factor = display_width / image_to_draw_on.shape[1]
             img_resized = cv2.resize(image_to_draw_on, (display_width, int(image_to_draw_on.shape[0] * scale_factor)))
         else:
             img_resized = image_to_draw_on
 
-        filename = os.path.join(save_folder_path, f"corners_img_{i:03d}.png")
-        cv2.imwrite(filename, img_resized)
-        # print(f"Saved image with corners to {filename}") # Reduce console noise, implied by main loop
+        if original_filenames and i < len(original_filenames):
+            base, ext = os.path.splitext(original_filenames[i])
+            filename = os.path.join(save_folder_path, f"{base}_corners{ext}")
+        else:
+            filename = os.path.join(save_folder_path, f"corners_img_{i:03d}.png")
 
-    # cv2.destroyAllWindows() # If using imshow
+        cv2.imwrite(filename, img_resized)
+        if logger: logger.debug(f"Saved image with corners to {filename}")
+    if logger: logger.debug("Exiting displayCorners.")
 

@@ -62,7 +62,7 @@ def getH(set1, set2):
     return H
 
 
-def getAllH(all_corners, square_side, h, w):
+def getAllH(all_corners, square_side, h, w, logger):
     """
     Compute homography matrices for all images.
 
@@ -76,15 +76,25 @@ def getAllH(all_corners, square_side, h, w):
     Returns:
         list of numpy.ndarray: A list of 3x3 homography matrices, one for each image.
     """
-    set1_world_points = getWorldPoints(square_side, h, w)  # 3D world points (Z=0)
-    all_H = []
-    for corners_image_points in all_corners:  # For each image
-        set2_image_points = corners_image_points  # 2D image points
-        H = getH(set1_world_points, set2_image_points)  # Compute homography
-        # Alternative using OpenCV's findHomography (often more robust due to RANSAC)
-        # H, _ = cv2.findHomography(set1_world_points, set2_image_points, cv2.RANSAC, 5.0)
-        all_H.append(H)
-    return all_H
+    if logger: logger.debug(
+        f"Entering getAllH. Number of corner sets: {len(all_corners)}, square_side: {square_side}, h: {h}, w: {w}")
+    set1_world_points = getWorldPoints(square_side, h, w)
+    if logger: logger.debug(
+        f"Generated world points for homography: shape {set1_world_points.shape}, first few points:\n{set1_world_points[:3]}")
+
+    all_H_list = []
+    for i, corners_image_points in enumerate(all_corners):
+        if logger: logger.debug(
+            f"Processing corner set {i + 1}/{len(all_corners)} for homography. Image points shape: {corners_image_points.shape}")
+        H_matrix = getH(set1_world_points, corners_image_points)
+        if H_matrix is None or isinstance(H_matrix, int):  # getH returns 0 or None on failure
+            if logger: logger.warning(f"Failed to compute homography for corner set {i}. Result: {H_matrix}")
+            all_H_list.append(None)  # Append None to mark failure for this view
+        else:
+            if logger: logger.debug(f"Computed homography for set {i}:\n{H_matrix}")
+            all_H_list.append(H_matrix)
+    if logger: logger.debug("Exiting getAllH.")
+    return all_H_list
 
 
 def getVij(hi, hj):
@@ -110,7 +120,7 @@ def getVij(hi, hj):
     return Vij.T  # Return as a column vector (or a 1D array that behaves like one in dot products)
 
 
-def getV(all_H):
+def getV(all_H, logger):
     """
     Construct the matrix V_constraints_matrix from all homography matrices.
     Each homography provides two constraints for V_constraints_matrix*b = 0.
@@ -121,21 +131,31 @@ def getV(all_H):
     Returns:
         numpy.ndarray: The matrix V_constraints_matrix, where each row is a constraint.
     """
+    if logger: logger.debug(f"Entering getV. Number of H matrices: {len(all_H)}")
     v_constraints = []
-    for H_matrix in all_H:
-        h1 = H_matrix[:, 0]  # First column of H
-        h2 = H_matrix[:, 1]  # Second column of H
-        # h3 = H_matrix[:, 2] # Third column of H (not used for these constraints)
+    for i, H_matrix in enumerate(all_H):
+        if H_matrix is None:
+            if logger: logger.warning(f"Skipping H matrix at index {i} in getV because it's None.")
+            continue  # Skip if homography computation failed for this view
 
-        # Constraint from h1^T B h2 = 0  => v12^T b = 0
+        h1 = H_matrix[:, 0]
+        h2 = H_matrix[:, 1]
+
         v12 = getVij(h1, h2)
-        # Constraint from h1^T B h1 = h2^T B h2 => (v11 - v22)^T b = 0
         v11 = getVij(h1, h1)
         v22 = getVij(h2, h2)
 
         v_constraints.append(v12.T)
         v_constraints.append((v11 - v22).T)
-    return np.array(v_constraints)
+        if logger: logger.debug(f"For H matrix {i}, added v12 and (v11-v22) constraints.")
+
+    if not v_constraints:  # If no valid H matrices were processed
+        if logger: logger.error("No valid constraints generated in getV. Returning empty array.")
+        return np.array([])
+
+    result_v_matrix = np.array(v_constraints)
+    if logger: logger.debug(f"Exiting getV. Constructed V matrix shape: {result_v_matrix.shape}")
+    return result_v_matrix
 
 
 def arrangeB_symmetric(b_vector):
@@ -164,7 +184,7 @@ def arrangeB_symmetric(b_vector):
     return B_mat
 
 
-def getB_matrix_from_V(all_H):
+def getB_matrix_from_V(all_H, logger):
     """
     Estimate the matrix B_matrix (related to the camera intrinsics A_intrinsic by B_matrix = lambda_val_scalar * A_intrinsic^-T A_intrinsic^-1)
     by solving V_constraints_matrix*b = 0.
@@ -175,17 +195,30 @@ def getB_matrix_from_V(all_H):
     Returns:
         numpy.ndarray: The estimated 3x3 symmetric matrix B_matrix.
     """
-    V_constraints_matrix = getV(all_H)  # Construct the V_constraints_matrix matrix from constraints
-    # Solve V_constraints_matrix*b = 0 using SVD. The solution b is the eigenvector corresponding
-    # to the smallest eigenvalue of V_constraints_matrix^T V_constraints_matrix, which is the last column of V_svd_V_transpose.
-    U_svd, sigma_svd, V_svd_V_transpose = np.linalg.svd(V_constraints_matrix)
-    b_solution = V_svd_V_transpose[-1, :]  # The last row of V_svd_V_transpose (or last column of V_svd_V)
-    print("b vector (solution to Vb=0): ", b_solution)
-    B_matrix_val = arrangeB_symmetric(b_solution)  # Arrange b into the 3x3 matrix B_matrix_val
+    if logger: logger.debug("Entering getB_matrix_from_V.")
+    V_constraints_matrix = getV(all_H, logger=logger)
+    if V_constraints_matrix.size == 0 or V_constraints_matrix.shape[0] < 1:  # Check if V is empty or has too few rows
+        if logger: logger.error("V matrix is empty or has insufficient constraints. Cannot compute B.")
+        return None  # Cannot compute B if V is empty
+
+    if logger: logger.debug(f"V matrix for SVD (shape {V_constraints_matrix.shape}):\n{V_constraints_matrix}")
+
+    try:
+        U_svd, sigma_svd, V_svd_V_transpose = np.linalg.svd(V_constraints_matrix)
+    except np.linalg.LinAlgError as e:
+        if logger: logger.error(f"SVD computation for V matrix failed: {e}", exc_info=True)
+        return None
+
+    b_solution = V_svd_V_transpose[-1, :]
+    if logger: logger.debug(f"b vector (solution to Vb=0 from SVD of V, shape {b_solution.shape}): {b_solution}")
+
+    B_matrix_val = arrangeB_symmetric(b_solution)
+    if logger: logger.debug(f"Arranged B matrix:\n{B_matrix_val}")
+    if logger: logger.debug("Exiting getB_matrix_from_V.")
     return B_matrix_val
 
 
-def getA_intrinsic_matrix(B_matrix_input):
+def getA_intrinsic_matrix(B_matrix_input, logger):
     """
     Compute the intrinsic camera matrix A_intrinsic from the matrix B_matrix_input.
     A_intrinsic = [[alpha, gamma, u0],
@@ -200,56 +233,53 @@ def getA_intrinsic_matrix(B_matrix_input):
         numpy.ndarray: The 3x3 upper-triangular intrinsic camera matrix A_intrinsic.
                        Returns None if B_matrix_input is not suitable (e.g., not positive definite).
     """
-    # Extract elements of B for clarity, following common notation B_ij
-    # B = [[B11, B12, B13],
-    #      [B12, B22, B23],
-    #      [B13, B23, B33]]
-    # B_matrix_input[0,0] = B11, B_matrix_input[0,1] = B12, B_matrix_input[0,2] = B13
-    # B_matrix_input[1,1] = B22, B_matrix_input[1,2] = B23
-    # B_matrix_input[2,2] = B33
+    if logger: logger.debug(f"Entering getA_intrinsic_matrix with B_matrix_input:\n{B_matrix_input}")
+
+    if B_matrix_input is None:
+        if logger: logger.error("B_matrix_input is None. Cannot compute A.")
+        return None
+
     B11, B12, B13 = B_matrix_input[0, 0], B_matrix_input[0, 1], B_matrix_input[0, 2]
-    B22, B23 = B_matrix_input[1, 1], B_matrix_input[1, 2]  # B_matrix_input[1,0] is B12
+    B22, B23 = B_matrix_input[1, 1], B_matrix_input[1, 2]
     B33 = B_matrix_input[2, 2]
+    if logger: logger.debug(
+        f"B matrix elements: B11={B11:.4e}, B12={B12:.4e}, B13={B13:.4e}, B22={B22:.4e}, B23={B23:.4e}, B33={B33:.4e}")
 
     v0_denominator = B11 * B22 - B12 ** 2
+    if logger: logger.debug(f"v0_denominator: {v0_denominator:.4e}")
 
-    # Principal point y-coordinate (v0 or cy)
     v0 = (B12 * B13 - B11 * B23) / v0_denominator
+    if logger: logger.debug(f"Calculated v0: {v0:.4e}")
 
-    # Lambda (overall scale factor, must be positive)
-    # lambda_val_scalar = B33 - (B13^2 + v0 * (B12 * B13 - B11 * B23)) / B11
     lambda_val_numerator_term = B13 ** 2 + v0 * (B12 * B13 - B11 * B23)
-    lambda_val_scalar = B33 - (lambda_val_numerator_term / B11)  # B11 already checked > 0
+    lambda_val_scalar = B33 - (lambda_val_numerator_term / B11)
+    if logger: logger.debug(f"Calculated lambda_val_scalar: {lambda_val_scalar:.4e}")
 
-    # Focal length in x-direction (alpha or fx)
     alpha_sq_arg = lambda_val_scalar / B11
-    # Argument should be positive if lambda_val_scalar > 0 and B11 > 0
     alpha = np.sqrt(alpha_sq_arg)
+    if logger: logger.debug(f"Calculated alpha: {alpha:.4e} (from alpha_sq_arg: {alpha_sq_arg:.4e})")
 
-    # Focal length in y-direction (beta or fy)
     beta_sq_arg = (lambda_val_scalar * B11) / v0_denominator
-
     beta = np.sqrt(beta_sq_arg)
+    if logger: logger.debug(f"Calculated beta: {beta:.4e} (from beta_sq_arg: {beta_sq_arg:.4e})")
 
-    # Skew factor (gamma or s)
-    # lambda_val_scalar is confirmed positive here.
     gamma = - (B12 * alpha ** 2 * beta) / lambda_val_scalar
+    if logger: logger.debug(f"Calculated gamma (skew): {gamma:.4e}")
 
-    # Principal point x-coordinate (u0 or cx)
-    # beta is confirmed positive (or rather, beta_sq_arg > 1e-9, so beta > some_epsilon).
-    # lambda_val_scalar is confirmed positive.
     u0 = (gamma * v0 / beta) - (B13 * alpha ** 2 / lambda_val_scalar)
+    if logger: logger.debug(f"Calculated u0: {u0:.4e}")
 
     A_intrinsic_matrix = np.array([
         [alpha, gamma, u0],
-        [0.0, beta, v0],  # Use 0.0 for float consistency
-        [0.0, 0.0, 1.0]  # Use 0.0, 1.0 for float consistency
-    ], dtype=np.float64)  # Explicitly set dtype for the whole matrix
-
+        [0.0, beta, v0],
+        [0.0, 0.0, 1.0]
+    ], dtype=np.float64)
+    if logger: logger.debug(f"Constructed A_intrinsic_matrix:\n{A_intrinsic_matrix}")
+    if logger: logger.debug("Exiting getA_intrinsic_matrix.")
     return A_intrinsic_matrix
 
 
-def getRotationAndTrans(A_intrinsic, all_H):
+def getRotationAndTrans(A_intrinsic, all_H, logger):
     """
     Compute the rotation (R_matrix_val) and translation (t_vec) [R_matrix_val|t_vec] for each view (homography).
 
@@ -260,57 +290,67 @@ def getRotationAndTrans(A_intrinsic, all_H):
     Returns:
         list of numpy.ndarray: A list of 3x4 [R_matrix_val|t_vec] extrinsic parameter matrices.
     """
-    all_RT = []
-    if A_intrinsic is None:  # Guard against None A_intrinsic
-        print("Error in getRotationAndTrans: Intrinsic matrix A is None.")
-        return all_RT  # Return empty list or handle error appropriately
+    if logger: logger.debug(
+        f"Entering getRotationAndTrans. A_intrinsic:\n{A_intrinsic}\nNumber of H matrices: {len(all_H)}")
+    all_RT_list = []
+    if A_intrinsic is None:
+        if logger: logger.error("Intrinsic matrix A is None. Cannot compute extrinsics.")
+        # Return a list of Nones matching all_H length to maintain correspondence if caller expects it
+        return [None] * len(all_H)
 
-    A_inv = np.linalg.inv(A_intrinsic)
+    try:
+        A_inv = np.linalg.inv(A_intrinsic)
+        if logger: logger.debug(f"Inverse of A_intrinsic:\n{A_inv}")
+    except np.linalg.LinAlgError as e:
+        if logger: logger.error(f"Failed to invert A_intrinsic: {e}", exc_info=True)
+        return [None] * len(all_H)
 
-    for H_matrix in all_H:
-        if H_matrix is None or isinstance(H_matrix, int):  # Check if H is valid
-            print("Warning: Invalid H matrix encountered in getRotationAndTrans. Skipping.")
-            # Optionally append a placeholder or continue
-            # For now, let's append a dummy RT to maintain list length if needed by caller,
-            # or simply skip and the caller handles varying list lengths.
-            # To be safe, let's make sure the caller can handle shorter all_RT lists if H is bad.
-            # For now, if H is bad, we just skip this iteration.
+    for i, H_matrix in enumerate(all_H):
+        if H_matrix is None:
+            if logger: logger.warning(f"Skipping H matrix at index {i} in getRotationAndTrans because it's None.")
+            all_RT_list.append(None)  # Maintain list structure
             continue
 
-        h1 = H_matrix[:, 0]  # First column of H
-        h2 = H_matrix[:, 1]  # Second column of H
-        h3 = H_matrix[:, 2]  # Third column of H (translation part)
+        if logger: logger.debug(f"Processing H matrix {i + 1}/{len(all_H)} for extrinsics:\n{H_matrix}")
+        h1 = H_matrix[:, 0]
+        h2 = H_matrix[:, 1]
+        h3 = H_matrix[:, 2]
 
         norm_A_inv_h1 = np.linalg.norm(np.dot(A_inv, h1))
-        if norm_A_inv_h1 < 1e-9:  # Avoid division by zero or very small numbers
-            print("Warning: Norm of A_inv * h1 is close to zero. Extrinsics may be ill-defined for an H matrix.")
-            # Create a dummy RT or skip. Let's skip for now.
-            # RT_matrix_val = np.hstack((np.eye(3), np.zeros((3,1))))
-            # all_RT.append(RT_matrix_val)
+        if logger: logger.debug(f"Norm of A_inv * h1 for H {i}: {norm_A_inv_h1:.4e}")
+
+        if norm_A_inv_h1 < 1e-9:
+            if logger: logger.warning(f"Norm of A_inv * h1 is close to zero for H {i}. Extrinsics may be ill-defined.")
+            all_RT_list.append(None)
             continue
 
         r1 = np.dot(A_inv, h1) / norm_A_inv_h1
         r2 = np.dot(A_inv, h2) / norm_A_inv_h1
-        # r3 must be orthogonal to r1 and r2. Ensure r1 and r2 are not collinear.
-        # This is implicitly handled if H is from a good calibration pattern.
         r3 = np.cross(r1, r2)
         t_vec = np.dot(A_inv, h3) / norm_A_inv_h1
+        if logger: logger.debug(f"Raw r1, r2, r3, t for H {i}:\nr1={r1}\nr2={r2}\nr3={r3}\nt={t_vec}")
 
-        # Form the rotation matrix R_matrix_val = [r1, r2, r3]
         R_matrix_val = np.column_stack((r1, r2, r3))
+        if logger: logger.debug(f"Constructed R matrix (before orthogonalization) for H {i}:\n{R_matrix_val}")
 
-        # Re-orthogonalize R_matrix_val to ensure it's a valid rotation matrix (e.g., using SVD)
-        # This is a good practice as numerical errors can make R_matrix_val not perfectly orthogonal.
-        U_r, _, Vt_r = np.linalg.svd(R_matrix_val)
-        R_orthogonal = np.dot(U_r, Vt_r)
-        # Ensure R_orthogonal has determinant +1 (a proper rotation matrix)
-        if np.linalg.det(R_orthogonal) < 0:
-            Vt_r[-1, :] *= -1  # Flip the sign of the last row of Vt_r (or last column of U_r)
+        try:
+            U_r, _, Vt_r = np.linalg.svd(R_matrix_val)
             R_orthogonal = np.dot(U_r, Vt_r)
+            if np.linalg.det(R_orthogonal) < 0:
+                if logger: logger.debug(
+                    f"Determinant of R for H {i} is negative ({np.linalg.det(R_orthogonal):.4f}), flipping sign of Vt_r's last row.")
+                Vt_r[-1, :] *= -1
+                R_orthogonal = np.dot(U_r, Vt_r)
+            if logger: logger.debug(f"Orthogonalized R matrix for H {i}:\n{R_orthogonal}")
+        except np.linalg.LinAlgError as e:
+            if logger: logger.error(f"SVD for R matrix orthogonalization failed for H {i}: {e}", exc_info=True)
+            all_RT_list.append(None)
+            continue
 
-        # Use the orthogonalized rotation matrix
-        RT_matrix_val = np.hstack((R_orthogonal, t_vec.reshape(3, 1)))  # Combine R_orthogonal and t_vec
-        all_RT.append(RT_matrix_val)
+        RT_matrix_val = np.hstack((R_orthogonal, t_vec.reshape(3, 1)))
+        if logger: logger.debug(f"Final [R|t] matrix for H {i}:\n{RT_matrix_val}")
+        all_RT_list.append(RT_matrix_val)
 
-    return all_RT
+    if logger: logger.debug("Exiting getRotationAndTrans.")
+    return all_RT_list
 
