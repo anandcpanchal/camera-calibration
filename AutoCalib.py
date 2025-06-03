@@ -440,7 +440,7 @@ def calibrate(input_path, output_path, corner_width_count, corner_height_count, 
         optimization_result = scipy.optimize.least_squares(
             fun=lossFunctionOptimization, # Will use its own logger instance if passed
             x0=x0_for_optimization,
-            method="lm",
+            method="trf", # alternate methods : lm / dogbox
             args=optimization_args, # Pass tuple of args
             verbose=0 # Set to 0 to reduce console spam, rely on our logger. 1 or 2 for scipy's own verbosity.
         )
